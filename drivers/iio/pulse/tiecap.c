@@ -14,6 +14,7 @@
 #include <linux/clk.h>
 #include <linux/iio/buffer.h>
 #include <linux/iio/iio.h>
+#include <linux/iio/sysfs.h>
 #include <linux/iio/trigger.h>
 #include <linux/iio/trigger_consumer.h>
 #include <linux/iio/triggered_buffer.h>
@@ -26,12 +27,23 @@
 #include "pwm-tipwmss.h"
 #include "tiecap.h"
 
+struct ecap_context {
+    u32 cap1;
+    u32 cap2;
+    u16 ecctl1;
+    u16 ecctl2;
+    u16 eceint;
+};
+
 struct ecap_state {
     unsigned long   flags;      // keep track of state (enabled, polarity, etc.)
     unsigned int    clk_rate;
     void __iomem    *regs;
     u32             *buf;
+    struct ecap_context ctx;
 };
+
+#define dev_to_ecap_state(d)    iio_priv(dev_to_iio_dev(d))
 
 static const struct iio_chan_spec ecap_channels[] = {
     {
@@ -51,8 +63,48 @@ static const struct iio_chan_spec ecap_channels[] = {
     IIO_CHAN_SOFT_TIMESTAMP(1)
 };
 
+static ssize_t ecap_attr_show(struct device *dev,
+                    struct device_attribute *attr, char *buf)
+{
+    struct ecap_state *state = dev_to_ecap_state(dev);
+
+    printk("TIECAP: Attribute show....\n");
+
+    return sprintf(buf, "%d\n",
+                test_bit(ECAP_POLARITY_HIGH, &state->flags));
+}
+
+static ssize_t ecap_attr_store(struct device *dev,
+                    struct device_attribute *attr,
+                    const char *buf,
+                    size_t len)
+{
+    int ret;
+    bool val;
+    struct ecap_state *state = dev_to_ecap_state(dev);
+
+    printk("TIECAP: Attribute store....\n");
+
+    if(test_bit(ECAP_ENABLED, &state->flags))
+        return -EINVAL;
+
+    ret = strtobool(buf, &val);
+    if(ret)
+        return ret;
+
+    if(val)
+        set_bit(ECAP_POLARITY_HIGH, &state->flags);
+    else
+        clear_bit(ECAP_POLARITY_HIGH, &state->flags);
+    
+    return len;
+}
+
+static IIO_DEVICE_ATTR(pulse_polarity, 0644, 
+    ecap_attr_show, ecap_attr_store, 0);
+
 static struct attribute * ecap_attributes[] = {
-    //&iio_dev_attr_pulse_polarity.dev_attr.attr,
+    &iio_dev_attr_pulse_polarity.dev_attr.attr,
     NULL
 };
 
@@ -100,17 +152,18 @@ static const struct iio_info ecap_info = {
 
 
 static irqreturn_t ecap_trigger_handler(int irq, void *private) {
-    printk(KERN_INFO "TIECAP: Buffer trigger handler...\n");
-
     struct iio_poll_func *pf = private;
     struct iio_dev *idev = pf->indio_dev;
     struct ecap_state *state = iio_priv(idev);
+    s64 time;
+
+    printk(KERN_INFO "TIECAP: Buffer trigger handler...\n");
 
     /* Read pulse counter value */
     *state->buf = readl(state->regs + CAP2);
-    s64 time = iio_get_time_ns(idev);
+    time = iio_get_time_ns(idev);
 
-    printk(KERN_INFO "TIECAP: Value: %d, Time: %ld\n", *state->buf, time);
+    printk(KERN_INFO "TIECAP: Value: %d, Time: %lld\n", *state->buf, time);
 
     iio_push_to_buffers_with_timestamp(idev, state->buf, time);
 
@@ -120,11 +173,11 @@ static irqreturn_t ecap_trigger_handler(int irq, void *private) {
 }
 
 static int ecap_buffer_predisable(struct iio_dev *idev) {
-    printk(KERN_INFO "TIECAP: Buffer pre disable...\n");
-
     struct ecap_state *state = iio_priv(idev);
     int ret = 0;
     u16 ecctl2;
+
+    printk(KERN_INFO "TIECAP: Buffer pre disable...\n");
 
     /* Stop capture */
     clear_bit(ECAP_ENABLED, &state->flags);
@@ -143,11 +196,11 @@ static int ecap_buffer_predisable(struct iio_dev *idev) {
 }
 
 static int ecap_buffer_postenable(struct iio_dev *idev) {
-    printk(KERN_INFO "TIECAP: Buffer post enable...\n");
-
     struct ecap_state *state = iio_priv(idev);
     int ret = 0;
     u16 ecctl1, ecctl2;
+
+    printk(KERN_INFO "TIECAP: Buffer post enable...\n");
 
     pm_runtime_get_sync(idev->dev.parent);
 
@@ -184,11 +237,11 @@ static const struct iio_buffer_setup_ops ecap_buffer_setup_ops = {
 };
 
 static irqreturn_t ecap_interrupt_handler(int irq, void *private) {
-    printk(KERN_INFO "TIECAP: Interrupt handling...\n");
-
     struct iio_dev *idev = private;
     struct ecap_state *state = iio_priv(idev);
     u16 ints;
+
+    printk(KERN_INFO "TIECAP: Interrupt handling...\n");
 
     iio_trigger_poll(idev->trig);
 
@@ -360,6 +413,11 @@ uninit_buffer:
 static int ecap_remove(struct platform_device *pdev) {
     struct iio_dev *idev = platform_get_drvdata(pdev);
 
+    /*pm_runtime_get_sync(&pdev->dev);
+
+    pwmss_submodule_state-change(pdev->dev.parent, PWMSS_ECAPCLK_STOP_REQ);
+
+    pm_runtime_put_sync(&pdev->dev);*/
     pm_runtime_disable(&pdev->dev);
 
     iio_device_unregister(idev);
@@ -368,13 +426,41 @@ static int ecap_remove(struct platform_device *pdev) {
     return 0;
 }
 
-static int ecap_suspend(struct device *dev) {
+static int __maybe_unused ecap_suspend(struct device *dev) {
+    struct ecap_state *state = dev_to_ecap_state(dev);
     printk(KERN_INFO "TIECAP: Module suspended.\n");
+
+    pm_runtime_get_sync(dev);
+    state->ctx.cap1 = readl(state->regs + CAP1);
+    state->ctx.cap2 = readl(state->regs + CAP2);
+    state->ctx.eceint = readw(state->regs + ECEINT);
+    state->ctx.ecctl1 = readw(state->regs + ECCTL1);
+    state->ctx.ecctl2 = readw(state->regs + ECCTL2);
+    pm_runtime_put_sync(dev);
+
+    /* If capture was active, disable eCAP */
+    if(test_bit(ECAP_ENABLED, &state->flags))
+        pm_runtime_put_sync(dev);
+    
     return 0;
 }
 
-static int ecap_resume(struct device *dev) {
+static int __maybe_unused ecap_resume(struct device *dev) {
+    struct ecap_state *state = dev_to_ecap_state(dev);
+
     printk(KERN_INFO "TIECAP: Module resumed.\n");
+
+    /* If capture was active, enable ECAP */
+    if(test_bit(ECAP_ENABLED, &state->flags))
+        pm_runtime_get_sync(dev);
+    
+    pm_runtime_get_sync(dev);
+    writel(state->ctx.cap1, state->regs + CAP1);
+    writel(state->ctx.cap2, state->regs + CAP2);
+    writew(state->ctx.eceint, state->regs + ECEINT);
+    writew(state->ctx.ecctl1, state->regs + ECCTL1);
+    writew(state->ctx.ecctl2, state->regs + ECCTL2);
+    pm_runtime_put_sync(dev);
     return 0;
 }
 

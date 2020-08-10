@@ -12,6 +12,7 @@
  */
 
 #include <linux/clk.h>
+#include <linux/iio/buffer.h>
 #include <linux/iio/iio.h>
 #include <linux/iio/trigger.h>
 #include <linux/iio/trigger_consumer.h>
@@ -100,6 +101,22 @@ static const struct iio_info ecap_info = {
 
 static irqreturn_t ecap_trigger_handler(int irq, void *private) {
     printk(KERN_INFO "TIECAP: Buffer trigger handler...\n");
+
+    struct iio_poll_func *pf = private;
+    struct iio_dev *idev = pf->indio_dev;
+    struct ecap_state *state = iio_priv(idev);
+
+    /* Read pulse counter value */
+    *state->buf = readl(state->regs + CAP2);
+    s64 time = iio_get_time_ns(idev);
+
+    printk(KERN_INFO "TIECAP: Value: %d, Time: %ld\n", *state->buf, time);
+
+    iio_push_to_buffers_with_timestamp(idev, state->buf, time);
+
+    iio_trigger_notify_done(idev->trig);
+
+    return IRQ_HANDLED;
 }
 
 static int ecap_buffer_predisable(struct iio_dev *idev) {

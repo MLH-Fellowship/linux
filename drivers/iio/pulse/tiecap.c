@@ -223,7 +223,7 @@ static irqreturn_t ecap_trigger_handler(int irq, void *private) {
     printk(KERN_INFO "TIECAP: Buffer trigger handler...\n");
 
     /* Read pulse counter value */
-    *state->buf = readl(state->regs + CAP2);
+    *state->buf = readl(state->regs + ECAP_CAP2);
 
     printk(KERN_INFO "TIECAP: Value: %d, Time: %lld\n", *state->buf, pf->timestamp);
 
@@ -245,12 +245,12 @@ static int ecap_buffer_predisable(struct iio_dev *idev) {
 
     /* Stop capture */
     clear_bit(ECAP_ENABLED, &state->flags);
-    ecctl2 = readw(state->regs + ECCTL2) & ~ECCTL2_TSCTR_FREERUN;
-    writew(ecctl2, state->regs + ECCTL2);
+    ecctl2 = readw(state->regs + ECAP_ECCTL2) & ~ECAP_ECCTL2_TSCTR_FREERUN;
+    writew(ecctl2, state->regs + ECAP_ECCTL2);
 
     /* Disable and clear all interrupts */
-    writew(0, state->regs + ECEINT);
-    writew(ECINT_ALL, state->regs + ECCLR);
+    writew(0, state->regs + ECAP_ECEINT);
+    writew(ECAP_ECINT_ALL, state->regs + ECAP_ECCLR);
 
     pm_runtime_put_sync(idev->dev.parent);
 
@@ -266,41 +266,41 @@ static int ecap_buffer_postenable(struct iio_dev *idev) {
 
     pm_runtime_get_sync(idev->dev.parent);
     
-    ecctl1 = readw(state->regs + ECCTL1);
+    ecctl1 = readw(state->regs + ECAP_ECCTL1);
 
     /* Configure pulse polarity */
     if(test_bit(ECAP_POL_CAP1_OFFSET, &state->flags)) {
         /* CAP1 falling */
-        ecctl1 |= ECCTL1_CAP1POL;
+        ecctl1 |= ECAP_ECCTL1_CAP1POL;
     }
     else {
         /* CAP1 rising */
-        ecctl1 &= ~ECCTL1_CAP1POL;
+        ecctl1 &= ~ECAP_ECCTL1_CAP1POL;
     }
 
     if(test_bit(ECAP_POL_CAP2_OFFSET, &state->flags)) {
         /* CAP2 falling */
-        ecctl1 |= ECCTL1_CAP2POL;
+        ecctl1 |= ECAP_ECCTL1_CAP2POL;
     }
     else {
         /* CAP2 rising */
-        ecctl1 &= ~ECCTL1_CAP2POL;
+        ecctl1 &= ~ECAP_ECCTL1_CAP2POL;
     }
     
     /* Configure pulse prescalar */
-    ecctl1 &= ~ECCTL1_PRESCALE_MASK;
-    ecctl1 |= (ECAP_PRESCALAR(state->flags) << ECCTL1_PRESCALE_OFFSET);
+    ecctl1 &= ~ECAP_ECCTL1_PRESCALE_MASK;
+    ecctl1 |= (ECAP_PRESCALAR(state->flags) << ECAP_ECCTL1_PRESCALE_OFFSET);
 
-    writew(ecctl1, state->regs + ECCTL1);
+    writew(ecctl1, state->regs + ECAP_ECCTL1);
 
 
     /* Enable CAP2 interrupt */
-    writew(ECINT_CEVT2, state->regs + ECEINT);
+    writew(ECAP_ECINT_CEVT2, state->regs + ECAP_ECEINT);
 
     /* Enable capture */
-    ecctl2 = readw(state->regs + ECCTL2);
-    ecctl2 |= ECCTL2_TSCTR_FREERUN | ECCTL2_REARM;
-    writew(ecctl2, state->regs + ECCTL2);
+    ecctl2 = readw(state->regs + ECAP_ECCTL2);
+    ecctl2 |= ECAP_ECCTL2_TSCTR_FREERUN | ECAP_ECCTL2_REARM;
+    writew(ecctl2, state->regs + ECAP_ECCTL2);
     set_bit(ECAP_ENABLED, &state->flags);
 
     ret = iio_triggered_buffer_postenable(idev);
@@ -323,9 +323,9 @@ static irqreturn_t ecap_interrupt_handler(int irq, void *private) {
     iio_trigger_poll(idev->trig);
 
     /* Clear CAP2 interrupt */
-    ints = readw(state->regs + ECFLG);
-    if(ints & ECINT_CEVT2)
-        writew(ECINT_CEVT2, state->regs + ECCLR);
+    ints = readw(state->regs + ECAP_ECFLG);
+    if(ints & ECAP_ECINT_CEVT2)
+        writew(ECAP_ECINT_CEVT2, state->regs + ECAP_ECCLR);
     else
         dev_warn(&idev->dev, "unhandled interrupt flag: %04x\n", ints);
 
@@ -343,11 +343,11 @@ static void ecap_init_hw(struct iio_dev *idev) {
     set_bit(ECAP_POL_CAP2_OFFSET, &state->flags);
 
     // Configure ECAP module
-    writew(ECCTL1_RUN_FREE | ECCTL1_CAPLDEN |
-            ECCTL1_CAP2POL | ECCTL1_CTRRST1,
-            state->regs + ECCTL1);
-    writew(ECCTL2_SYNCO_SEL_DIS | ECCTL2_STOP_WRAP_2,
-            state->regs + ECCTL2);
+    writew(ECAP_ECCTL1_RUN_FREE | ECAP_ECCTL1_CAPLDEN |
+            ECAP_ECCTL1_CAP2POL | ECAP_ECCTL1_CTRRST1,
+            state->regs + ECAP_ECCTL1);
+    writew(ECAP_ECCTL2_SYNCO_SEL_DIS | ECAP_ECCTL2_STOP_WRAP_2,
+            state->regs + ECAP_ECCTL2);
 }
 
 static int ecap_probe(struct platform_device *pdev) {
@@ -510,11 +510,11 @@ static int __maybe_unused ecap_suspend(struct device *dev) {
     printk(KERN_INFO "TIECAP: Module suspended.\n");
 
     pm_runtime_get_sync(dev);
-    state->ctx.cap1 = readl(state->regs + CAP1);
-    state->ctx.cap2 = readl(state->regs + CAP2);
-    state->ctx.eceint = readw(state->regs + ECEINT);
-    state->ctx.ecctl1 = readw(state->regs + ECCTL1);
-    state->ctx.ecctl2 = readw(state->regs + ECCTL2);
+    state->ctx.cap1 = readl(state->regs + ECAP_CAP1);
+    state->ctx.cap2 = readl(state->regs + ECAP_CAP2);
+    state->ctx.eceint = readw(state->regs + ECAP_ECEINT);
+    state->ctx.ecctl1 = readw(state->regs + ECAP_ECCTL1);
+    state->ctx.ecctl2 = readw(state->regs + ECAP_ECCTL2);
     pm_runtime_put_sync(dev);
 
     /* If capture was active, disable eCAP */
@@ -534,11 +534,11 @@ static int __maybe_unused ecap_resume(struct device *dev) {
         pm_runtime_get_sync(dev);
     
     pm_runtime_get_sync(dev);
-    writel(state->ctx.cap1, state->regs + CAP1);
-    writel(state->ctx.cap2, state->regs + CAP2);
-    writew(state->ctx.eceint, state->regs + ECEINT);
-    writew(state->ctx.ecctl1, state->regs + ECCTL1);
-    writew(state->ctx.ecctl2, state->regs + ECCTL2);
+    writel(state->ctx.cap1, state->regs + ECAP_CAP1);
+    writel(state->ctx.cap2, state->regs + ECAP_CAP2);
+    writew(state->ctx.eceint, state->regs + ECAP_ECEINT);
+    writew(state->ctx.ecctl1, state->regs + ECAP_ECCTL1);
+    writew(state->ctx.ecctl2, state->regs + ECAP_ECCTL2);
     pm_runtime_put_sync(dev);
     return 0;
 }

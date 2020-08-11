@@ -37,6 +37,7 @@ struct ecap_context {
 
 struct ecap_state {
     unsigned long   flags;      // keep track of state (enabled, polarity, etc.)
+    struct mutex    lock;
     unsigned int    clk_rate;
     void __iomem    *regs;
     u32             *buf;
@@ -63,9 +64,8 @@ static const struct iio_chan_spec ecap_channels[] = {
     IIO_CHAN_SOFT_TIMESTAMP(1)
 };
 
-static ssize_t ecap_attr_show(struct device *dev,
-                    struct device_attribute *attr, char *buf)
-{
+static ssize_t ecap_attr_pol_show(struct device *dev,
+                    struct device_attribute *attr, char *buf) {
     struct ecap_state *state = dev_to_ecap_state(dev);
 
     printk("TIECAP: Attribute show....\n");
@@ -74,11 +74,10 @@ static ssize_t ecap_attr_show(struct device *dev,
                 test_bit(ECAP_POLARITY_HIGH, &state->flags));
 }
 
-static ssize_t ecap_attr_store(struct device *dev,
+static ssize_t ecap_attr_pol_store(struct device *dev,
                     struct device_attribute *attr,
                     const char *buf,
-                    size_t len)
-{
+                    size_t len) {
     int ret;
     bool val;
     struct ecap_state *state = dev_to_ecap_state(dev);
@@ -100,11 +99,49 @@ static ssize_t ecap_attr_store(struct device *dev,
     return len;
 }
 
-static IIO_DEVICE_ATTR(pulse_polarity, 0644, 
-    ecap_attr_show, ecap_attr_store, 0);
+static ssize_t ecap_attr_prescalar_show(struct device *dev,
+                    struct device_attribute *attr, char *buf) {
+    ssize_t ret;
+    struct ecap_state *state = dev_to_ecap_state(dev);
 
-static struct attribute * ecap_attributes[] = {
+    mutex_lock(&state->lock);
+    ret = sprintf(buf, "%x\n", ECAP_PRESCALAR(state->flags));
+    mutex_unlock(&state->lock);
+
+    return ret;
+}
+
+static ssize_t ecap_attr_prescalar_store(struct device *dev,
+                    struct device_attribute *attr,
+                    const char *buf,
+                    size_t len) {
+    int ret;
+    long val;
+    struct ecap_state *state = dev_to_ecap_state(dev);
+
+    if(test_bit(ECAP_ENABLED, &state->flags))
+        return -EINVAL;
+
+    ret = kstrtol(buf, 16, &val);
+    if(val > 0x05 && val != 0x1E && val != 0x1F)
+        return -EINVAL;
+    
+    mutex_lock(&state->lock);
+    state->flags &= ~(0x1F << ECAP_PRESCALAR_OFFSET); // clear bits
+    state->flags |= (val << ECAP_PRESCALAR_OFFSET);
+    mutex_unlock(&state->lock);
+
+    return len;
+}
+
+static IIO_DEVICE_ATTR(pulse_polarity, 0644, 
+    ecap_attr_pol_show, ecap_attr_pol_store, 0);
+static IIO_DEVICE_ATTR(pulse_prescalar, 0644,
+    ecap_attr_prescalar_show, ecap_attr_prescalar_store, 0);
+
+static struct attribute *ecap_attributes[] = {
     &iio_dev_attr_pulse_polarity.dev_attr.attr,
+    &iio_dev_attr_pulse_prescalar.dev_attr.attr,
     NULL
 };
 
@@ -203,9 +240,10 @@ static int ecap_buffer_postenable(struct iio_dev *idev) {
     printk(KERN_INFO "TIECAP: Buffer post enable...\n");
 
     pm_runtime_get_sync(idev->dev.parent);
+    
+    ecctl1 = readw(state->regs + ECCTL1);
 
     /* Configure pulse polarity */
-    ecctl1 = readw(state->regs + ECCTL1);
     if(test_bit(ECAP_POLARITY_HIGH, &state->flags)) {
         /* CAP1 rising, CAP2 falling */
         ecctl1 |= ECCTL1_CAP2POL;
@@ -215,7 +253,13 @@ static int ecap_buffer_postenable(struct iio_dev *idev) {
         ecctl1 &= ~ECCTL1_CAP2POL;
         ecctl1 |= ECCTL1_CAP1POL;
     }
+    
+    /* Configure pulse prescalar */
+    ecctl1 &= ~ECCTL1_PRESCALE_MASK;
+    ecctl1 |= (ECAP_PRESCALAR(state->flags) << ECCTL1_PRESCALE_OFFSET);
+
     writew(ecctl1, state->regs + ECCTL1);
+
 
     /* Enable CAP2 interrupt */
     writew(ECINT_CEVT2, state->regs + ECEINT);
@@ -264,7 +308,10 @@ static void ecap_init_hw(struct iio_dev *idev) {
     struct ecap_state *state = iio_priv(idev);
     
     // Update flags
-    clear_bit(ECAP_ENABLED, &state->flags);
+    mutex_lock(&state->lock);
+    state->flags &= 0;
+    mutex_unlock(&state->lock);
+
     set_bit(ECAP_POLARITY_HIGH, &state->flags);
 
     // Configure ECAP module
@@ -290,6 +337,8 @@ static int ecap_probe(struct platform_device *pdev) {
     if(!idev)
         return -ENOMEM;
     state = iio_priv(idev);
+
+    mutex_init(&state->lock);
 
     clk = devm_clk_get(&pdev->dev, "fck");
     if(IS_ERR(clk)) {

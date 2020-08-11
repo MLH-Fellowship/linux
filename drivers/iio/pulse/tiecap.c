@@ -64,17 +64,17 @@ static const struct iio_chan_spec ecap_channels[] = {
     IIO_CHAN_SOFT_TIMESTAMP(1)
 };
 
-static ssize_t ecap_attr_pol_show(struct device *dev,
+static ssize_t ecap_attr_pol_cap1_show(struct device *dev,
                     struct device_attribute *attr, char *buf) {
     struct ecap_state *state = dev_to_ecap_state(dev);
 
     printk("TIECAP: Attribute show....\n");
 
     return sprintf(buf, "%d\n",
-                test_bit(ECAP_POLARITY_HIGH, &state->flags));
+                test_bit(ECAP_POL_CAP1_OFFSET, &state->flags));
 }
 
-static ssize_t ecap_attr_pol_store(struct device *dev,
+static ssize_t ecap_attr_pol_cap1_store(struct device *dev,
                     struct device_attribute *attr,
                     const char *buf,
                     size_t len) {
@@ -92,11 +92,44 @@ static ssize_t ecap_attr_pol_store(struct device *dev,
         return ret;
 
     if(val)
-        set_bit(ECAP_POLARITY_HIGH, &state->flags);
+        set_bit(ECAP_POL_CAP1_OFFSET, &state->flags);
     else
-        clear_bit(ECAP_POLARITY_HIGH, &state->flags);
+        clear_bit(ECAP_POL_CAP1_OFFSET, &state->flags);
     
     return len;
+}
+
+static ssize_t ecap_attr_pol_cap2_show(struct device *dev,
+                    struct device_attribute *attr, char *buf) {
+    struct ecap_state *state = dev_to_ecap_state(dev);
+
+    return sprintf(buf, "%d\n",
+                test_bit(ECAP_POL_CAP2_OFFSET, &state->flags));
+}
+
+static ssize_t ecap_attr_pol_cap2_store(struct device *dev,
+                    struct device_attribute *attr,
+                    const char *buf,
+                    size_t len) {
+    int ret;
+    bool val;
+    struct ecap_state *state = dev_to_ecap_state(dev);
+
+    printk("TIECAP: Attribute store....\n");
+
+    if(test_bit(ECAP_ENABLED, &state->flags))
+        return -EINVAL;
+
+    ret = strtobool(buf, &val);
+    if(ret)
+        return ret;
+
+    if(val)
+        set_bit(ECAP_POL_CAP2_OFFSET, &state->flags);
+    else
+        clear_bit(ECAP_POL_CAP2_OFFSET, &state->flags);
+    
+    return len;    
 }
 
 static ssize_t ecap_attr_prescalar_show(struct device *dev,
@@ -134,13 +167,16 @@ static ssize_t ecap_attr_prescalar_store(struct device *dev,
     return len;
 }
 
-static IIO_DEVICE_ATTR(pulse_polarity, 0644, 
-    ecap_attr_pol_show, ecap_attr_pol_store, 0);
+static IIO_DEVICE_ATTR(pulse_cap1pol, 0644, 
+    ecap_attr_pol_cap1_show, ecap_attr_pol_cap1_store, 0);
+static IIO_DEVICE_ATTR(pulse_cap2pol, 0644,
+    ecap_attr_pol_cap2_show, ecap_attr_pol_cap2_store, 0);
 static IIO_DEVICE_ATTR(pulse_prescalar, 0644,
     ecap_attr_prescalar_show, ecap_attr_prescalar_store, 0);
 
 static struct attribute *ecap_attributes[] = {
-    &iio_dev_attr_pulse_polarity.dev_attr.attr,
+    &iio_dev_attr_pulse_cap1pol.dev_attr.attr,
+    &iio_dev_attr_pulse_cap2pol.dev_attr.attr,
     &iio_dev_attr_pulse_prescalar.dev_attr.attr,
     NULL
 };
@@ -186,7 +222,6 @@ static const struct iio_info ecap_info = {
     .attrs = &ecap_attribute_group,
     .read_raw = &ecap_read_raw
 };
-
 
 static irqreturn_t ecap_trigger_handler(int irq, void *private) {
     struct iio_poll_func *pf = private;
@@ -244,14 +279,22 @@ static int ecap_buffer_postenable(struct iio_dev *idev) {
     ecctl1 = readw(state->regs + ECCTL1);
 
     /* Configure pulse polarity */
-    if(test_bit(ECAP_POLARITY_HIGH, &state->flags)) {
-        /* CAP1 rising, CAP2 falling */
-        ecctl1 |= ECCTL1_CAP2POL;
-        ecctl1 &= ~ECCTL1_CAP1POL;
-    } else {
-        /* CAP1 falling, CAP2 rising */
-        ecctl1 &= ~ECCTL1_CAP2POL;
+    if(test_bit(ECAP_POL_CAP1_OFFSET, &state->flags)) {
+        /* CAP1 falling */
         ecctl1 |= ECCTL1_CAP1POL;
+    }
+    else {
+        /* CAP1 rising */
+        ecctl1 &= ~ECCTL1_CAP1POL;
+    }
+
+    if(test_bit(ECAP_POL_CAP2_OFFSET, &state->flags)) {
+        /* CAP2 falling */
+        ecctl1 |= ECCTL1_CAP2POL;
+    }
+    else {
+        /* CAP2 rising */
+        ecctl1 &= ~ECCTL1_CAP2POL;
     }
     
     /* Configure pulse prescalar */
@@ -308,11 +351,11 @@ static void ecap_init_hw(struct iio_dev *idev) {
     struct ecap_state *state = iio_priv(idev);
     
     // Update flags
-    mutex_lock(&state->lock);
     state->flags &= 0;
-    mutex_unlock(&state->lock);
 
-    set_bit(ECAP_POLARITY_HIGH, &state->flags);
+    // Initialize with CAP1 = rising, CAP2 = falling
+    // (measure the on-time of the signal)
+    set_bit(ECAP_POL_CAP2_OFFSET, &state->flags);
 
     // Configure ECAP module
     writew(ECCTL1_RUN_FREE | ECCTL1_CAPLDEN |

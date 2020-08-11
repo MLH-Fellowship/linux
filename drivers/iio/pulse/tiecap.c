@@ -224,11 +224,10 @@ static irqreturn_t ecap_trigger_handler(int irq, void *private) {
 
     /* Read pulse counter value */
     *state->buf = readl(state->regs + CAP2);
-    time = iio_get_time_ns(idev);
 
-    printk(KERN_INFO "TIECAP: Value: %d, Time: %lld\n", *state->buf, time);
+    printk(KERN_INFO "TIECAP: Value: %d, Time: %lld\n", *state->buf, pf->timestamp);
 
-    iio_push_to_buffers_with_timestamp(idev, state->buf, time);
+    iio_push_to_buffers_with_timestamp(idev, state->buf, pf->timestamp);
 
     iio_trigger_notify_done(idev->trig);
 
@@ -333,11 +332,6 @@ static irqreturn_t ecap_interrupt_handler(int irq, void *private) {
     return IRQ_HANDLED;
 }
 
-static irqreturn_t ecap_iio_pollfunc(int irq, void *p) {
-    printk(KERN_INFO "TIECAP: Poll func...\n");
-    return IRQ_WAKE_THREAD;
-}
-
 static void ecap_init_hw(struct iio_dev *idev) {
     struct ecap_state *state = iio_priv(idev);
     
@@ -417,7 +411,7 @@ static int ecap_probe(struct platform_device *pdev) {
     printk(KERN_INFO "TIECAP: Trigger registered, %s-dev%d\n", 
                         idev->name, idev->id);
    
-   ret = iio_triggered_buffer_setup(idev, &ecap_iio_pollfunc,
+   ret = iio_triggered_buffer_setup(idev, &iio_pollfunc_store_time,
                         &ecap_trigger_handler,
                         &ecap_buffer_setup_ops);
     if(ret)

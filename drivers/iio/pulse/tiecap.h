@@ -2,39 +2,44 @@
 #define __TIECAP_H
 
 /* ECAP regs and bits */
-#define CAP1			0x08
-#define CAP2			0x0c
-#define ECCTL1			0x28
-#define ECCTL1_RUN_FREE		BIT(15)
-#define ECCTL1_CAPLDEN		BIT(8)
-#define ECCTL1_CAP2POL		BIT(2)
-#define ECCTL1_CTRRST1		BIT(1)
-#define ECCTL1_CAP1POL		BIT(0)
-#define ECCTL2			0x2a
-#define ECCTL2_SYNCO_SEL_DIS	BIT(7)
-#define ECCTL2_TSCTR_FREERUN	BIT(4)
-#define ECCTL2_REARM		BIT(3)
-#define ECCTL2_STOP_WRAP_2	BIT(1)
-#define ECEINT			0x2c
-#define ECFLG			0x2e
-#define ECCLR			0x30
-#define ECINT_CTRCMP		BIT(7)
-#define ECINT_CTRPRD		BIT(6)
-#define ECINT_CTROVF		BIT(5)
-#define ECINT_CEVT4		BIT(4)
-#define ECINT_CEVT3		BIT(3)
-#define ECINT_CEVT2		BIT(2)
-#define ECINT_CEVT1		BIT(1)
-#define ECINT_ALL		(ECINT_CTRCMP |	\
-				ECINT_CTRPRD |	\
-				ECINT_CTROVF |	\
-				ECINT_CEVT4 |	\
-				ECINT_CEVT3 |	\
-				ECINT_CEVT2 |	\
-				ECINT_CEVT1)
+#define ECAP_CAP1					0x08
+#define ECAP_CAP2					0x0c
+#define ECAP_ECCTL1					0x28
+#define ECAP_ECCTL1_RUN_FREE		BIT(15)
+#define ECAP_ECCTL1_CAPLDEN			BIT(8)
+#define ECAP_ECCTL1_CAP2POL			BIT(2)
+#define ECAP_ECCTL1_CTRRST1			BIT(1)
+#define ECAP_ECCTL1_CAP1POL			BIT(0)
+#define ECAP_ECCTL1_PRESCALE_OFFSET	9
+#define ECAP_ECCTL1_PRESCALE_MASK	(0x1F << ECCTL1_PRESCALE_OFFSET)
+#define ECAP_ECCTL2					0x2a
+#define ECAP_ECCTL2_SYNCO_SEL_DIS	BIT(7)
+#define ECAP_ECCTL2_TSCTR_FREERUN	BIT(4)
+#define ECAP_ECCTL2_REARM			BIT(3)
+#define ECAP_ECCTL2_STOP_WRAP_2		BIT(1)
+#define ECAP_ECEINT				0x2c
+#define ECAP_ECFLG				0x2e
+#define ECAP_ECCLR				0x30
+#define ECAP_ECINT_CTRCMP		BIT(7)
+#define ECAP_ECINT_CTRPRD		BIT(6)
+#define ECAP_ECINT_CTROVF		BIT(5)
+#define ECAP_ECINT_CEVT4		BIT(4)
+#define ECAP_ECINT_CEVT3		BIT(3)
+#define ECAP_ECINT_CEVT2		BIT(2)
+#define ECAP_ECINT_CEVT1		BIT(1)
+#define ECAP_ECINT_ALL		(ECAP_ECINT_CTRCMP |	\
+				ECAP_ECINT_CTRPRD |	\
+				ECAP_ECINT_CTROVF |	\
+				ECAP_ECINT_CEVT4 |	\
+				ECAP_ECINT_CEVT3 |	\
+				ECAP_ECINT_CEVT2 |	\
+				ECAP_ECINT_CEVT1)
 
 /* ECAP driver flags */
-#define ECAP_POLARITY_HIGH	BIT(1)
-#define ECAP_ENABLED		BIT(0)
+#define ECAP_PRESCALAR_OFFSET	3
+#define ECAP_POL_CAP2_OFFSET	2
+#define ECAP_POL_CAP1_OFFSET	1
+#define ECAP_ENABLED			0
+#define ECAP_PRESCALAR(flags)	(((uint8_t)(flags >> ECAP_PRESCALAR_OFFSET)) & 0x1F)
 
 #endif

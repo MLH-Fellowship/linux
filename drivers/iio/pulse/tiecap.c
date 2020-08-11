@@ -241,6 +241,8 @@ static int ecap_buffer_predisable(struct iio_dev *idev) {
 
     printk(KERN_INFO "TIECAP: Buffer pre disable...\n");
 
+    ret = iio_triggered_buffer_predisable(idev);
+
     /* Stop capture */
     clear_bit(ECAP_ENABLED, &state->flags);
     ecctl2 = readw(state->regs + ECCTL2) & ~ECCTL2_TSCTR_FREERUN;
@@ -249,8 +251,6 @@ static int ecap_buffer_predisable(struct iio_dev *idev) {
     /* Disable and clear all interrupts */
     writew(0, state->regs + ECEINT);
     writew(ECINT_ALL, state->regs + ECCLR);
-
-    ret = iio_triggered_buffer_predisable(idev);
 
     pm_runtime_put_sync(idev->dev.parent);
 
@@ -490,6 +490,8 @@ uninit_buffer:
 static int ecap_remove(struct platform_device *pdev) {
     struct iio_dev *idev = platform_get_drvdata(pdev);
 
+    iio_device_unregister(idev);
+
     /*pm_runtime_get_sync(&pdev->dev);
 
     pwmss_submodule_state-change(pdev->dev.parent, PWMSS_ECAPCLK_STOP_REQ);
@@ -497,7 +499,7 @@ static int ecap_remove(struct platform_device *pdev) {
     pm_runtime_put_sync(&pdev->dev);*/
     pm_runtime_disable(&pdev->dev);
 
-    iio_device_unregister(idev);
+    iio_triggered_buffer_cleanup(idev);
 
     printk(KERN_INFO "TIECAP: Module removed.\n");
     return 0;

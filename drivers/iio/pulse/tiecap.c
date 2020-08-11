@@ -51,7 +51,7 @@ static const struct iio_chan_spec ecap_channels[] = {
         .type       = IIO_COUNT,
         .channel    = 0,
         .info_mask_separate =
-            BIT(IIO_CHAN_INFO_RAW) | BIT(IIO_CHAN_INFO_SCALE),
+            BIT(IIO_CHAN_INFO_SCALE),
         .scan_index         = 0,
         .scan_type = {
             .sign           = 'u',
@@ -196,15 +196,6 @@ static int ecap_read_raw(struct iio_dev *idev,
 {
     struct ecap_state *state = iio_priv(idev);
     switch(mask) {
-        case IIO_CHAN_INFO_RAW:
-            /*
-            * Always return 0 as a pulse width sample
-            * is only valid in a triggered condition
-            */
-            printk(KERN_INFO "TIECAP: Reading raw (raw)....\n");
-            *val = 0;
-            *val2 = 0;
-            return IIO_VAL_INT;
         case IIO_CHAN_INFO_SCALE:
             printk(KERN_INFO "TIECAP: Reading raw (scale)....\n");
             *val = 0;

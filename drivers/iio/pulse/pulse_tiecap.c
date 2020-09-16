@@ -12,6 +12,7 @@
 #include <linux/clk.h>
 #include <linux/iio/buffer.h>
 #include <linux/iio/iio.h>
+#include <linux/iio/kfifo_buf.h>
 #include <linux/iio/sysfs.h>
 #include <linux/iio/trigger.h>
 #include <linux/iio/trigger_consumer.h>
@@ -99,7 +100,6 @@ static const struct iio_chan_spec ecap_channels[] = {
 			.endianness	= IIO_LE,
 		},
 	},
-	IIO_CHAN_SOFT_TIMESTAMP(1)
 };
 
 static ssize_t ecap_attr_pol_cap1_show(struct device *dev,
@@ -266,6 +266,7 @@ int ecap_trig_try_reenable(struct iio_trigger *trig) {
 		writew(ECAP_ECINT_CEVT2, state->regs + ECAP_ECCLR);
 	else
 		dev_warn(&idev->dev, "unhandled interrupt flag: %04x\n", ints);
+	
 	return 0;
 }
 
@@ -296,25 +297,6 @@ static const struct iio_info ecap_info = {
 	.read_raw = &ecap_read_raw
 };
 
-static irqreturn_t ecap_trigger_handler(int irq, void *private)
-{
-	struct iio_poll_func *pf = private;
-	struct iio_dev *idev = pf->indio_dev;
-	struct ecap_state *state = iio_priv(idev);
-	int ints;
-
-	/* Read pulse counter value */
-	state->buf[0] = readl(state->regs + ECAP_CAP2);
-
-	dev_dbg(&idev->dev, "TIECAP: Value: %d, Time: %lld\n", state->buf[0], pf->timestamp);
-
-	iio_push_to_buffers_with_timestamp(idev, state->buf, pf->timestamp);
-
-	iio_trigger_notify_done(idev->trig);
-
-	return IRQ_HANDLED;
-}
-
 static int ecap_buffer_predisable(struct iio_dev *idev)
 {
 	struct ecap_state *state = iio_priv(idev);
@@ -323,7 +305,7 @@ static int ecap_buffer_predisable(struct iio_dev *idev)
 
 	dev_dbg(&idev->dev, "TIECAP: Buffer pre disable...\n");
 
-	ret = iio_triggered_buffer_predisable(idev); // COMMENT THIS OUT
+	//ret = iio_triggered_buffer_predisable(idev); // COMMENT THIS OUT
 
 	/* Stop capture */
 	clear_bit(ECAP_ENABLED, &state->flags);
@@ -387,7 +369,7 @@ static int ecap_buffer_postenable(struct iio_dev *idev)
 
 	mutex_unlock(&state->lock);
 
-	ret = iio_triggered_buffer_postenable(idev); // COMMENT THIS OUT
+	//ret = iio_triggered_buffer_postenable(idev); // COMMENT THIS OUT
 
 	return ret;
 }
@@ -405,15 +387,23 @@ static irqreturn_t ecap_interrupt_handler(int irq, void *private)
 
 	dev_dbg(&idev->dev, "TIECAP: Interrupt handling...\n");
 
-	iio_trigger_poll(idev->trig);
+	/* Read pulse counter value */
+	mutex_lock(&state->lock);
+	state->buf[0] = readl(state->regs + ECAP_CAP2);
 
+	dev_dbg(&idev->dev, "TIECAP: Value: %d\n", state->buf[0]);
+
+	iio_push_to_buffers(idev, state->buf);
+
+	/* Clear CAP2 interrupt */
 	ints = readw(state->regs + ECAP_ECFLG);
 	if (ints & ECAP_ECINT_CEVT2)
 		writew(ECAP_ECINT_CEVT2, state->regs + ECAP_ECCLR);
 	else
 		dev_warn(&idev->dev, "unhandled interrupt flag: %04x\n", ints);
+	mutex_unlock(&state->lock);
 	
-	return IRQ_WAKE_THREAD;
+	return IRQ_HANDLED;
 }
 
 static void ecap_init_hw(struct iio_dev *idev)
@@ -443,7 +433,7 @@ static int ecap_probe(struct platform_device *pdev)
 	struct clk *clk;
 	struct ecap_state *state;
 	struct resource *r;
-	struct iio_trigger *trig;
+	struct iio_buffer *buffer;
 
 	dev_dbg(&pdev->dev, "TIECAP: Probing....\n");
 
@@ -470,39 +460,26 @@ static int ecap_probe(struct platform_device *pdev)
 	idev->modes = INDIO_DIRECT_MODE;
 	idev->info = &ecap_info;
 	idev->channels = ecap_channels;
-	/* One h/w capture and one s/w timestamp channel per instance */
-	idev->num_channels = 2;
+	/* One h/w capture */
+	idev->num_channels = 1;
 
-	trig = devm_iio_trigger_alloc(&pdev->dev, "%s-dev%d",
-					idev->name, idev->id);
-
-	if (!trig)
+	/* Setup buffer */
+	buffer = iio_kfifo_allocate();
+	if (!buffer)
 		return -ENOMEM;
+	
+	iio_device_attach_buffer(idev, buffer);
 
-	trig->dev.parent = idev->dev.parent;
-	iio_trigger_set_drvdata(trig, idev);
-	trig->ops = &iio_interrupt_trigger_ops;
+	idev->setup_ops = &ecap_buffer_setup_ops;
+	idev->modes |= INDIO_BUFFER_SOFTWARE;
 
-	ret = devm_iio_trigger_register(&pdev->dev, trig);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to register trigger\n");
-		return ret;
-	}
-
-	ret = devm_iio_triggered_buffer_setup(&pdev->dev, idev, &iio_pollfunc_store_time,
-						&ecap_trigger_handler, &ecap_buffer_setup_ops);
-	if (ret)
-		return ret;
-
+	/* Setup IRQ */
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
 		dev_err(&pdev->dev, "no irq is specified\n");
 		return irq;
 	}
 
-	/*ret = devm_request_irq(&pdev->dev, irq,
-				&ecap_interrupt_handler,
-				0, dev_name(&pdev->dev), idev);*/
 	ret = devm_request_threaded_irq(&pdev->dev, irq, NULL,
 					&ecap_interrupt_handler, IRQF_ONESHOT,
 					dev_name(&pdev->dev), idev);
@@ -540,7 +517,7 @@ static int ecap_probe(struct platform_device *pdev)
 	return 0;
 
 uninit_buffer:
-	iio_triggered_buffer_cleanup(idev);
+	iio_kfifo_free(idev->buffer);
 
 	return ret;
 }
